@@ -20,6 +20,16 @@ st.set_page_config(
     layout="wide"
 )
 
+# Narrow the sidebar
+st.markdown("""
+<style>
+    [data-testid="stSidebar"] {
+        min-width: 220px !important;
+        max-width: 220px !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 MARTINGALE_FILE = 'Martingale_Series_Analysis.xlsx'
 
 # ── LOAD HISTORICAL DATA ──────────────────────────────────────────

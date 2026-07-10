@@ -10,6 +10,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import numpy as np
+import os
 from datetime import date, timedelta
 import requests
 
@@ -23,8 +24,9 @@ MARTINGALE_FILE = 'Martingale_Series_Analysis.xlsx'
 
 # ── LOAD HISTORICAL DATA ──────────────────────────────────────────
 @st.cache_data(ttl=86400, show_spinner="Loading historical series data...")
-def load_series_data():
-    df = pd.read_excel(MARTINGALE_FILE, sheet_name='Raw Series Data', skiprows=1)
+def load_series_data(file_bytes):
+    import io as _io
+    df = pd.read_excel(_io.BytesIO(file_bytes), sheet_name='Raw Series Data', skiprows=1)
     df.columns = ['Year','Date','Road_Team','Home_Team','Dog_Location',
                   'Dog_WinPct','Fav_WinPct','Avg_Line','Results','Won_1_Game']
     df = df.dropna(subset=['Dog_WinPct','Fav_WinPct'])
@@ -129,11 +131,33 @@ st.markdown("Dog Win% vs Favorite Win% — Historical series results with today'
 st.markdown("---")
 
 # ── LOAD DATA ─────────────────────────────────────────────────────
-try:
-    df = load_series_data()
-except FileNotFoundError:
-    st.error(f"Could not find `{MARTINGALE_FILE}`. Make sure it's in the project root.")
-    st.stop()
+# Try local file first (dev), then ask for upload (Streamlit Cloud)
+df = None
+
+if os.path.exists(MARTINGALE_FILE):
+    try:
+        with open(MARTINGALE_FILE, 'rb') as f:
+            df = load_series_data(f.read())
+    except Exception as e:
+        st.warning(f"Could not load local file: {e}")
+
+if df is None:
+    st.info("📤 Upload `Martingale_Series_Analysis.xlsx` to load historical data.")
+    uploaded_file = st.file_uploader(
+        "Upload Martingale_Series_Analysis.xlsx",
+        type=['xlsx'],
+        key='martingale_upload'
+    )
+    if uploaded_file is not None:
+        try:
+            df = load_series_data(uploaded_file.read())
+            st.success(f"✓ Loaded {len(df):,} series records")
+        except Exception as e:
+            st.error(f"Could not read file: {e}")
+            st.stop()
+    else:
+        st.stop()
+
 
 # ── SIDEBAR CONTROLS ──────────────────────────────────────────────
 st.sidebar.header("⚙️ Controls")

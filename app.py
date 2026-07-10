@@ -245,151 +245,6 @@ if not games:
 st.success(f"✓ {len(games)} games scheduled for {report_date.strftime('%A, %B %d, %Y')}")
 st.markdown("---")
 
-# ── SCENARIO HEATMAP (always visible) ────────────────────────────
-with st.expander("🔥 Scenario Performance Heatmap  (2023–2026 Historical Backtest)", expanded=False):
-    st.caption("Win % by scenario, color-coded from red (low) → yellow → green (high). Based on historical data.")
-
-    @st.cache_data(show_spinner="Building heatmap...")
-    def build_heatmap_data(enriched_date_str):
-        """Run all 36 scenarios against historical data and return a summary DataFrame."""
-        from daily_report import SCENARIO_DEFS, NEEDS_OPP_STREAK, NEEDS_OPP_ROAD_WP, DIVISIONS
-        import numpy as np
-
-        df = load_enriched_data(enriched_date_str)
-
-        # Build opponent streak and road win% lookups for the full dataset
-        all_teams = df['team'].unique()
-        opp_streaks_all = {}
-        opp_road_wpct_all = {}
-        for team in all_teams:
-            tdf = df[df['team'] == team].sort_values('date')
-            if not tdf.empty:
-                last = tdf.iloc[-1]
-                sb = last['streak_before']; res = last['result']
-                opp_streaks_all[team] = (sb+1 if sb>=0 else 1) if res=='W' else (sb-1 if sb<=0 else -1)
-                road = tdf[tdf['home_away']=='away']
-                if not road.empty:
-                    rw = (road['result']=='W').sum(); rl = (road['result']=='L').sum()
-                    opp_road_wpct_all[team] = rw/(rw+rl) if (rw+rl)>0 else None
-
-        rows = []
-        for sid, sname, verdict, func in SCENARIO_DEFS:
-            matched = []
-            for _, row in df.iterrows():
-                if row.get('result') not in ('W', 'L'):
-                    continue
-                r = dict(row)
-                try:
-                    if sid in NEEDS_OPP_STREAK:
-                        fired = func(r, opp_streaks_all)
-                    elif sid in NEEDS_OPP_ROAD_WP:
-                        fired = func(r, opp_road_wpct_all)
-                    else:
-                        fired = func(r)
-                except Exception:
-                    fired = False
-                if fired:
-                    matched.append(row['result'])
-
-            total = len(matched)
-            wins  = matched.count('W')
-            losses= matched.count('L')
-            win_pct = wins / total if total > 0 else None
-
-            rows.append({
-                'ID':          sid,
-                'Scenario':    sname,
-                'Type':        verdict,
-                'Games':       total,
-                'W':           wins,
-                'L':           losses,
-                'Win%':        round(win_pct * 100, 1) if win_pct is not None else None,
-            })
-
-        return pd.DataFrame(rows)
-
-    heatmap_df = build_heatmap_data(report_date_str)
-
-    if not heatmap_df.empty:
-        # Color mapping helper
-        def winpct_color(val, vtype):
-            """Return hex bg color based on win% and verdict type."""
-            if val is None:
-                return '#F0F0F0'
-            if vtype == 'CLEAR FADE':
-                # For fades lower win% = better — invert
-                if val <= 40:   return '#C6EFCE'  # green = good fade
-                elif val <= 48: return '#FFEB9C'  # yellow
-                else:           return '#FFC7CE'  # red = bad
-            else:
-                if val >= 60:   return '#C6EFCE'
-                elif val >= 50: return '#FFEB9C'
-                else:           return '#FFC7CE'
-
-        # Sort by Win%
-        sort_col = st.selectbox("Sort by:", ["Win% (High→Low)", "Win% (Low→High)", "Scenario #", "Games (Most→Fewest)"],
-                                index=0, key='heatmap_sort')
-        if sort_col == "Win% (High→Low)":
-            heatmap_df = heatmap_df.sort_values('Win%', ascending=False, na_position='last')
-        elif sort_col == "Win% (Low→High)":
-            heatmap_df = heatmap_df.sort_values('Win%', ascending=True, na_position='last')
-        elif sort_col == "Games (Most→Fewest)":
-            heatmap_df = heatmap_df.sort_values('Games', ascending=False)
-        else:
-            heatmap_df = heatmap_df.sort_values('ID')
-
-        type_filter = st.multiselect("Filter by type:", ['CLEAR BET', 'CLEAR FADE', 'INCONSISTENT'],
-                                     default=['CLEAR BET', 'CLEAR FADE', 'INCONSISTENT'], key='heatmap_filter')
-        heatmap_df = heatmap_df[heatmap_df['Type'].isin(type_filter)]
-
-        # Render as styled dataframe using background_gradient per row
-        def style_row(row):
-            color = winpct_color(row['Win%'], row['Type'])
-            type_color = {'CLEAR BET': '#C6EFCE', 'CLEAR FADE': '#FFC7CE', 'INCONSISTENT': '#FFEB9C'}
-            tc = type_color.get(row['Type'], '#FFFFFF')
-            return [
-                'background-color: #EDF3FB',       # ID
-                'background-color: #EDF3FB',       # Scenario
-                f'background-color: {tc}; font-weight: bold',  # Type
-                'background-color: #EDF3FB',       # Games
-                'background-color: #E2EFDA',       # W
-                'background-color: #FFE7E7',       # L
-                f'background-color: {color}; font-weight: bold',  # Win%
-            ]
-
-        display_df = heatmap_df.copy()
-        display_df['Win%'] = display_df['Win%'].apply(lambda x: f"{x:.1f}%" if x is not None else "—")
-
-        styled = display_df.style.apply(style_row, axis=1)
-
-        st.dataframe(
-            styled,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                'ID':       st.column_config.TextColumn('#', width='small'),
-                'Scenario': st.column_config.TextColumn('Scenario Name', width='large'),
-                'Type':     st.column_config.TextColumn('Type', width='medium'),
-                'Games':    st.column_config.NumberColumn('Games', width='small'),
-                'W':        st.column_config.NumberColumn('W', width='small'),
-                'L':        st.column_config.NumberColumn('L', width='small'),
-                'Win%':     st.column_config.TextColumn('Win %', width='small'),
-            }
-        )
-
-        # Mini summary bar
-        has_data = heatmap_df[heatmap_df['Games'] > 0]
-        if not has_data.empty:
-            c1, c2, c3 = st.columns(3)
-            best = has_data.loc[has_data['Win%'].idxmax()] if not has_data['Win%'].isna().all() else None
-            worst = has_data.loc[has_data['Win%'].idxmin()] if not has_data['Win%'].isna().all() else None
-            if best is not None:
-                c1.success(f"🏆 Best: #{best['ID']} — {best['Win%']:.1f}%")
-            if worst is not None:
-                c2.error(f"⚠️ Lowest: #{worst['ID']} — {worst['Win%']:.1f}%")
-            c3.info(f"📊 {len(has_data)} scenarios with data ({has_data['Games'].sum():,} total games)")
-
-st.markdown("---")
 
 
 st.subheader("📋 Enter Today's Moneylines")
@@ -706,3 +561,146 @@ if st.button("⚾ Generate Daily Report", type="primary", use_container_width=Tr
 
         The file grows over the season as your full record. No server storage needed.
         """)
+
+
+# ── SCENARIO PERFORMANCE HEATMAP ─────────────────────────────────
+st.markdown("---")
+st.subheader("🔥 Scenario Performance Heatmap  (2023–2026 Historical Backtest)")
+st.caption("Win % color-coded: 🟢 green = strong, 🟡 yellow = mixed, 🔴 red = weak. Click column headers to sort.")
+
+@st.cache_data(ttl=86400, show_spinner="Building heatmap from historical data...")
+def build_heatmap_data():
+    """
+    Run all 36 scenarios against the full historical dataset using fast
+    vectorized pandas — no row-by-row iteration.
+    Returns a summary DataFrame with W, L, Win% per scenario.
+    """
+    from daily_report import (
+        load_historical_data, compute_all_states, SCENARIO_DEFS,
+        NEEDS_OPP_STREAK, NEEDS_OPP_ROAD_WP, DIVISIONS
+    )
+
+    df = load_historical_data()
+    df = compute_all_states(df)
+    df = df[df['result'].isin(['W', 'L'])].copy()
+
+    # Pre-compute opponent streak per team (last known)
+    opp_streaks = {}
+    opp_road_wpct = {}
+    for team, tdf in df.groupby('team'):
+        tdf = tdf.sort_values('date')
+        last = tdf.iloc[-1]
+        sb, res = last['streak_before'], last['result']
+        opp_streaks[team] = (sb + 1 if sb >= 0 else 1) if res == 'W' else (sb - 1 if sb <= 0 else -1)
+        road = tdf[tdf['home_away'] == 'away']
+        if not road.empty:
+            rw = (road['result'] == 'W').sum()
+            rl = (road['result'] == 'L').sum()
+            opp_road_wpct[team] = rw / (rw + rl) if (rw + rl) > 0 else None
+
+    rows = []
+    for sid, sname, verdict, func in SCENARIO_DEFS:
+        try:
+            if sid in NEEDS_OPP_STREAK:
+                mask = df.apply(lambda r: bool(func(r.to_dict(), opp_streaks)), axis=1)
+            elif sid in NEEDS_OPP_ROAD_WP:
+                mask = df.apply(lambda r: bool(func(r.to_dict(), opp_road_wpct)), axis=1)
+            else:
+                mask = df.apply(lambda r: bool(func(r.to_dict())), axis=1)
+        except Exception:
+            mask = pd.Series(False, index=df.index)
+
+        subset = df[mask]
+        total  = len(subset)
+        wins   = (subset['result'] == 'W').sum()
+        losses = (subset['result'] == 'L').sum()
+        win_pct = round(wins / total * 100, 1) if total > 0 else None
+
+        rows.append({
+            '#':        sid,
+            'Scenario': sname,
+            'Type':     verdict,
+            'Games':    total,
+            'W':        int(wins),
+            'L':        int(losses),
+            'Win%':     win_pct,
+        })
+
+    return pd.DataFrame(rows)
+
+with st.expander("Click to view heatmap", expanded=False):
+    with st.spinner("Running scenarios against historical data… (first load ~30 sec, then cached)"):
+        hmap = build_heatmap_data()
+
+    if not hmap.empty:
+        c1, c2 = st.columns([2, 2])
+        with c1:
+            sort_opt = st.selectbox(
+                "Sort by",
+                ["Win% High→Low", "Win% Low→High", "Scenario #", "Games High→Low"],
+                key='hm_sort'
+            )
+        with c2:
+            type_filter = st.multiselect(
+                "Type",
+                ['CLEAR BET', 'CLEAR FADE', 'INCONSISTENT'],
+                default=['CLEAR BET', 'CLEAR FADE', 'INCONSISTENT'],
+                key='hm_type'
+            )
+
+        hmap = hmap[hmap['Type'].isin(type_filter)].copy()
+
+        if sort_opt == "Win% High→Low":
+            hmap = hmap.sort_values('Win%', ascending=False, na_position='last')
+        elif sort_opt == "Win% Low→High":
+            hmap = hmap.sort_values('Win%', ascending=True, na_position='last')
+        elif sort_opt == "Games High→Low":
+            hmap = hmap.sort_values('Games', ascending=False)
+        else:
+            hmap = hmap.sort_values('#')
+
+        def _row_style(row):
+            v = row['Win%']
+            vtype = row['Type']
+            if v is None:
+                wc = 'background-color:#F0F0F0'
+            elif vtype == 'CLEAR FADE':
+                wc = ('background-color:#C6EFCE;font-weight:bold' if v <= 42
+                      else 'background-color:#FFEB9C;font-weight:bold' if v <= 50
+                      else 'background-color:#FFC7CE;font-weight:bold')
+            else:
+                wc = ('background-color:#C6EFCE;font-weight:bold' if v >= 58
+                      else 'background-color:#FFEB9C;font-weight:bold' if v >= 50
+                      else 'background-color:#FFC7CE;font-weight:bold')
+            tc = {'CLEAR BET': 'background-color:#C6EFCE;font-weight:bold',
+                  'CLEAR FADE': 'background-color:#FFC7CE;font-weight:bold',
+                  'INCONSISTENT': 'background-color:#FFEB9C;font-weight:bold'}.get(vtype, '')
+            return ['', '', tc, '', 'background-color:#E2EFDA', 'background-color:#FFE7E7', wc]
+
+        disp = hmap.copy()
+        disp['Win%'] = disp['Win%'].apply(lambda x: f"{x:.1f}%" if x is not None else "—")
+
+        st.dataframe(
+            disp.style.apply(_row_style, axis=1),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                '#':        st.column_config.TextColumn('#', width=55),
+                'Scenario': st.column_config.TextColumn('Scenario', width='large'),
+                'Type':     st.column_config.TextColumn('Type', width='medium'),
+                'Games':    st.column_config.NumberColumn('Games', width=70),
+                'W':        st.column_config.NumberColumn('W', width=55),
+                'L':        st.column_config.NumberColumn('L', width=55),
+                'Win%':     st.column_config.TextColumn('Win %', width=75),
+            }
+        )
+
+        has = hmap[hmap['Games'] > 0].copy()
+        has['_pct'] = has['Win%'].apply(lambda x: float(x.replace('%','')) if isinstance(x, str) else (x or 0))
+        if not has.empty:
+            best  = has.loc[has['_pct'].idxmax()]
+            worst = has.loc[has['_pct'].idxmin()]
+            b1, b2, b3 = st.columns(3)
+            b1.success(f"🏆 Best: #{best['#']} — {best['Win%']}")
+            b2.error(f"⚠️ Lowest: #{worst['#']} — {worst['Win%']}")
+            b3.info(f"📊 {len(has)} scenarios · {int(hmap['Games'].sum()):,} total games")
